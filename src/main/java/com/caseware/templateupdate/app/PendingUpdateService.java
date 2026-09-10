@@ -31,12 +31,21 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Keeps a queryable engagement→template index and materializes human-readable
- * pending updates when templates are published.
+ * Core of the take-home slice.
  *
- * <p>This service has no engagement-loader dependency. The 1-minute engagement
- * load is never used to answer "what version is this file on?" or to list
- * pending updates.
+ * <p>The engagement system can tell you which template version a file is on, but only
+ * after it rehydrates the file into a session pod. That load is ~1 minute and is a
+ * hard constraint — we cannot scan a firm's engagements at publish time.
+ *
+ * <p>So this service never opens an engagement. It keeps a small projection
+ * (engagement → applied template version) that is written from hooks the engagement
+ * system already has in memory: create, apply, decline, and later ordinary open.
+ * Template publishes are cheap (shared store, keyed by id+version). We join the two.
+ *
+ * <p>If several publishes land before the user decides, we do not stack a queue of
+ * separate "please review v2", "please review v3" cards. The pending record is always
+ * <em>what they are on → what latest is</em>, plus a hop list so they can see how
+ * that gap grew week by week.
  */
 public final class PendingUpdateService {
     private final EngagementTemplateRegistry registry;
@@ -62,6 +71,11 @@ public final class PendingUpdateService {
         this.cache = Objects.requireNonNull(cache);
     }
 
+    /**
+     * Engagement management already loaded the template to create the file, so this
+     * is a free place to capture version. We still call {@link #syncPending} in case
+     * the file was created from a slightly stale copy while a newer publish existed.
+     */
     public void onEngagementCreated(CreatedEngagement event) {
         EngagementTemplateRecord record = new EngagementTemplateRecord(
                 event.engagementId(),
@@ -74,6 +88,17 @@ public final class PendingUpdateService {
         syncPending(record);
     }
 
+    /**
+     * Publishes are infrequent (~weekly per product) so we can do real work here.
+     *
+     * <p>Many firms share the same template, and many engagements inside a firm sit
+     * on the same applied version. Diff + summary are computed once per
+     * {@code (templateId, appliedVersion, newVersion)} and then copied onto each
+     * affected row. Doing it per engagement would just recompute the same JSON.
+     *
+     * <p>Someone who already declined this exact target version is left alone; a
+     * later publish (higher version) will re-open the decision.
+     */
     public void onTemplatePublished(TemplatePublished event) {
         catalog.recordPublish(event.templateId(), event.version());
         List<EngagementTemplateRecord> affected =
@@ -108,6 +133,20 @@ public final class PendingUpdateService {
         }
     }
 
+    /**
+     * Apply/decline is processed by engagement management, which <em>does</em> load
+     * the file (out of scope for us). By the time this event arrives, that work is
+     * done — or at least committed — and we are told the version they acted on.
+     *
+     * <p>We still re-sync afterwards. The load can take a minute; a newer template
+     * can publish in that window. If they applied v3 and v4 shipped while the pod
+     * was busy, they should immediately see v3→v4 pending, not a blank dashboard.
+     *
+     * <p>Decline does not rewind the template and does not mean "never show me
+     * these procedures again." It means stay on the current applied version and
+     * dismiss this target. Accepting a later version will still bring those
+     * changes in, so the next summary is honest about that.
+     */
     public void onDecision(DecisionEvent event) {
         EngagementTemplateRecord record = registry.find(event.engagementId())
                 .orElseThrow(() -> new NotFoundException("engagement", event.engagementId().value()));
@@ -148,6 +187,10 @@ public final class PendingUpdateService {
         return pending.find(engagementId);
     }
 
+    /**
+     * Firm dashboard: every engagement, pending ones first. This is a projection
+     * read — if we had to open files to build it, the page would take hours.
+     */
     public List<AtAGlanceRow> listAtAGlance(FirmId firmId) {
         List<AtAGlanceRow> rows = new ArrayList<>();
         for (EngagementTemplateRecord record : registry.listByFirm(firmId)) {
@@ -168,6 +211,10 @@ public final class PendingUpdateService {
         return rows;
     }
 
+    /**
+     * Single place that decides whether a row should show a pending update.
+     * Used after create and after a decision so we do not duplicate the rules.
+     */
     private void syncPending(EngagementTemplateRecord record) {
         Optional<Integer> latest = catalog.latestVersion(record.templateId());
         if (latest.isEmpty() || latest.get() <= record.appliedVersion() || record.isDismissedThrough(latest.get())) {
@@ -186,6 +233,11 @@ public final class PendingUpdateService {
         ));
     }
 
+    /**
+     * {@code accumulated} is the practitioner view: everything that would land if
+     * they apply latest right now. {@code hops} is the week-by-week changelog for
+     * when two or three publishes stacked up before anyone looked.
+     */
     private Summaries buildSummaries(TemplateId templateId, int fromVersion, int toVersion, String releaseNotes) {
         ChangeSummary accumulated = summaryFor(templateId, fromVersion, toVersion, releaseNotes);
         List<Integer> chain = versionChain(templateId, fromVersion, toVersion);
@@ -196,6 +248,11 @@ public final class PendingUpdateService {
         return new Summaries(accumulated, hops);
     }
 
+    /**
+     * Catalog should already contain every published version, but create-hooks and
+     * retries can race. Force the endpoints of the range onto the chain so we
+     * still produce applied→latest even if an intermediate record is missing.
+     */
     private List<Integer> versionChain(TemplateId templateId, int fromVersion, int toVersion) {
         List<Integer> chain = new ArrayList<>();
         for (int version : catalog.versions(templateId)) {
@@ -212,6 +269,16 @@ public final class PendingUpdateService {
         return chain;
     }
 
+    /**
+     * Cache is keyed by version pair. A hundred files on v1 when v3 ships should
+     * hit the differ once, not a hundred times. Release notes skip the cache on
+     * the way in so a content-authored headline is not replaced by a stale
+     * generated one (and then we store the result for everyone else).
+     *
+     * <p>Grounding runs on every generated summary, including an LLM adapter if
+     * one is plugged in later. If a bullet cannot point at a real diff path, we
+     * drop it on the floor rather than show practitioners invented methodology.
+     */
     private ChangeSummary summaryFor(TemplateId templateId, int fromVersion, int toVersion, String releaseNotes) {
         if (releaseNotes == null || releaseNotes.isBlank()) {
             Optional<ChangeSummary> cached = cache.get(templateId, fromVersion, toVersion);

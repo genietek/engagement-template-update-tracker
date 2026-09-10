@@ -14,6 +14,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * Small structural differ for the slice. Production can swap this out for the
+ * "quick and reliable" comparer the assignment says already exists.
+ *
+ * <p>Audit templates are mostly lists of entities with stable {@code id}s
+ * (procedures, checklists, disclosures). Matching those arrays by id — not by
+ * index — is what keeps "we inserted P-210 at the top" from showing up as a
+ * rewrite of every later item. If an array has no ids (or duplicate ids) we
+ * fall back to index comparison and live with noisier output.
+ *
+ * <p>Paths are JSON-pointer-ish so summary grounding has a stable string to
+ * check. Users never see the pointer; they see the summarizer's sentence.
+ */
 public final class JsonDiffer {
     public JsonDiff diff(TemplateId templateId, int fromVersion, int toVersion, JsonNode from, JsonNode to) {
         List<JsonDiffOp> operations = new ArrayList<>();
@@ -54,6 +67,10 @@ public final class JsonDiffer {
         }
     }
 
+    /**
+     * Prefer identity over position. Content teams reorder procedures without
+     * meaning to "change" them; index diffs would scream about every move.
+     */
     private void diffArrays(ArrayNode from, ArrayNode to, String path, List<JsonDiffOp> operations) {
         Map<String, JsonNode> fromById = keyed(from);
         Map<String, JsonNode> toById = keyed(to);
@@ -86,6 +103,7 @@ public final class JsonDiffer {
         }
     }
 
+    /** {@code null} means "this array is not safely keyable — use indexes." */
     private static Map<String, JsonNode> keyed(ArrayNode array) {
         Map<String, JsonNode> byId = new LinkedHashMap<>();
         for (JsonNode element : array) {

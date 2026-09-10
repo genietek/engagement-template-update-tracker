@@ -7,6 +7,11 @@ import com.caseware.templateupdate.model.PendingUpdate;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Materialized pending rows for the dashboard. One record per engagement, always
+ * representing the current gap (applied → latest), not a queue of individual
+ * publishes. Replacing the row on each publish is how stacked updates work.
+ */
 public interface PendingUpdateStore {
     void put(PendingUpdate update);
 

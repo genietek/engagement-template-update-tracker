@@ -18,6 +18,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+/**
+ * Walks the scenarios the assignment cares about: at-a-glance pending, a
+ * readable summary, stacked publishes before anyone decides, then apply vs
+ * decline, then another publish. Not a product UI.
+ */
 public final class DemoApp {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TemplateId TEMPLATE = new TemplateId("audit-ifrs");

@@ -10,6 +10,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Stand-in for the real template store + comparer. {@link #diffCalls()} exists
+ * so tests can prove we did not run a JSON diff per engagement.
+ */
 public final class InMemoryTemplateDiffer implements TemplateDiffer {
     private final Map<String, JsonNode> documents = new ConcurrentHashMap<>();
     private final JsonDiffer jsonDiffer = new JsonDiffer();

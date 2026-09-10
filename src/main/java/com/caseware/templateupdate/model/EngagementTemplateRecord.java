@@ -1,5 +1,14 @@
 package com.caseware.templateupdate.model;
 
+/**
+ * Projection row. {@code appliedVersion} is the template the engagement is
+ * actually on (create, or last successful apply).
+ *
+ * <p>{@code dismissedThroughVersion} is how decline works without lying to the
+ * user later. Declining v3 means "don't keep nagging me about v3." It does not
+ * change {@code appliedVersion}. When v4 ships, pending reopens as applied→v4,
+ * and that summary still includes v2/v3 content because applying v4 would.
+ */
 public record EngagementTemplateRecord(
         EngagementId engagementId,
         FirmId firmId,

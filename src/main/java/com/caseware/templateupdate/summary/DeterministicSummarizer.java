@@ -14,6 +14,20 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * Default wording for practitioners. No model in the loop in this slice —
+ * exact prose is testable, and we will not invent a procedure that is not in
+ * the diff.
+ *
+ * <p>A nested field add (e.g. guidance appearing on an existing P-100) is
+ * phrased as an <em>update</em> of that item, not as a brand-new procedure.
+ * Adding a whole array of titled objects is flattened into titles so nobody
+ * has to read raw JSON.
+ *
+ * <p>{@link #assertGrounded} is the safety rail for any future LLM adapter:
+ * every bullet must cite a path that actually exists on the diff. Audit
+ * language is not a place to trust uncited generation.
+ */
 public final class DeterministicSummarizer implements SummaryGenerator {
     private static final Map<String, String> CATEGORIES = Map.of(
             "procedures", "Procedures",
@@ -40,6 +54,10 @@ public final class DeterministicSummarizer implements SummaryGenerator {
         );
     }
 
+    /**
+     * Fail closed. If we cannot map a sentence back to a diff op, we do not
+     * show it — better a missing bullet than a hallucinated workpaper.
+     */
     public static void assertGrounded(JsonDiff diff, ChangeSummary summary) {
         Set<String> allowed = diff.operations().stream().map(JsonDiffOp::path).collect(Collectors.toSet());
         for (SummaryItem item : summary.items()) {
@@ -110,6 +128,10 @@ public final class DeterministicSummarizer implements SummaryGenerator {
         return parts;
     }
 
+    /**
+     * Content-team notes beat generated headlines. They wrote the update; we
+     * should not overwrite their wording with "3 added, 1 updated."
+     */
     private static String headline(JsonDiff diff, List<SummaryItem> items, String releaseNotes) {
         if (releaseNotes != null && !releaseNotes.isBlank()) {
             return releaseNotes.trim();
